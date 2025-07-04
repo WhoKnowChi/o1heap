@@ -112,6 +112,25 @@ void* o1heapAllocate(O1HeapInstance* const handle, const size_t amount);
 /// The function is executed in constant time.
 void o1heapFree(O1HeapInstance* const handle, void* const pointer);
 
+/// The semantics follow realloc() with additional guarantees, the full list of which is provided below.
+///
+/// Changes the size of the memory block pointed to by ptr to size bytes. The contents of the memory block
+/// are preserved up to the lesser of the new and old sizes. If the new size is larger than the old size,
+/// the value of the newly allocated portion is indeterminate (not zero-filled).
+///
+/// If ptr is NULL, the call is equivalent to o1heapAllocate(handle, size).
+/// If size is 0, the behavior follows standard realloc() semantics: the memory block is freed and
+/// a pointer to a minimal valid memory block is returned (implementation-defined behavior).
+///
+/// If the reallocation is successful, a pointer to the newly allocated memory is returned.
+/// The returned pointer may be the same as ptr if the existing block could accommodate the new size,
+/// or it may be different if the memory had to be moved. The returned pointer is guaranteed to be
+/// aligned at O1HEAP_ALIGNMENT.
+///
+/// If the reallocation fails, NULL is returned and the original memory block pointed to by ptr
+/// remains unchanged and valid.
+void* o1heapRealloc(O1HeapInstance* const handle, void* const ptr, const size_t size);
+
 /// Obtains the maximum theoretically possible allocation size for this heap instance.
 /// This is useful when implementing std::allocator_traits<Alloc>::max_size.
 size_t o1heapGetMaxAllocationSize(const O1HeapInstance* const handle);

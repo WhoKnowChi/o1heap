@@ -531,3 +531,113 @@ O1HeapDiagnostics o1heapGetDiagnostics(const O1HeapInstance* const handle)
     const O1HeapDiagnostics out = handle->diagnostics;
     return out;
 }
+
+
+void* o1heapRealloc(O1HeapInstance* const handle, void* const ptr, const size_t size)
+{
+    O1HEAP_ASSERT(handle != NULL);
+    
+    // Case 1: ptr is NULL - behave like malloc
+    if (ptr == NULL) {
+        // Base on realloc(3p) https://man7.org/linux/man-pages/man3/realloc.3p.html, there are tow method,
+        // 1st: A null pointer shall be returned and, if ptr is not a null pointer, errno shall be set to an implementation-defined value.
+        // 2nd: A pointer to the allocated space shall be returned, and the memory object pointed to by ptr shall be freed. 
+        //      The application shall ensure that the pointer is not used to access an object.
+        #if 0
+        // We don't use 1st method. Due to the realloc will return a pointer when size = 0 and ptr = NULL
+        return o1heapAllocate(handle, size);
+        #else
+        // We use 2nd method.
+        if (size == 0U) {
+            void* new_ptr = o1heapAllocate(handle, 1U);
+            return new_ptr;
+        }
+        return o1heapAllocate(handle, size);
+        #endif
+    }
+    
+    // Case 2: size is 0 - behave could be tew methods
+    if (size == 0U) {
+        // Base on realloc(3p) https://man7.org/linux/man-pages/man3/realloc.3p.html, there are tow method,
+        // 1st: A null pointer shall be returned and, if ptr is not a null pointer, errno shall be set to an implementation-defined value.
+        // 2nd: A pointer to the allocated space shall be returned, and the memory object pointed to by ptr shall be freed. 
+        //      The application shall ensure that the pointer is not used to access an object.
+        #if 0
+        // We don't use 1st method. Due to the realloc will return a pointer when size = 0 and ptr = NULL
+        o1heapFree(handle, ptr);
+        return NULL;
+        #else
+        // We use 2nd method.
+        void* new_ptr = o1heapAllocate(handle, 1U); // Allocate a minimum valid memory block
+        if (new_ptr != NULL) {
+            o1heapFree(handle, ptr);
+            return new_ptr;
+        } else {
+            // memory allocate fail
+            o1heapFree(handle, ptr);
+            return NULL;
+        }
+        return new_ptr;
+        #endif
+    }
+    
+    // Case 3: Normal reallocation
+    // Get the original fragment to determine its size
+    Fragment* const old_frag = (Fragment*) (void*) (((char*) ptr) - O1HEAP_ALIGNMENT);
+    
+    // Validate the old fragment (similar to o1heapFree validation)
+    O1HEAP_ASSERT(((size_t) old_frag) % sizeof(Fragment*) == 0U);
+    O1HEAP_ASSERT(((size_t) old_frag) >= (((size_t) handle) + INSTANCE_SIZE_PADDED));
+    O1HEAP_ASSERT(((size_t) old_frag) <= 
+           (((size_t) handle) + INSTANCE_SIZE_PADDED + handle->diagnostics.capacity - FRAGMENT_SIZE_MIN));
+    O1HEAP_ASSERT(old_frag->header.used);  // Must be allocated
+    O1HEAP_ASSERT(old_frag->header.size >= FRAGMENT_SIZE_MIN);
+    O1HEAP_ASSERT(old_frag->header.size <= handle->diagnostics.capacity);
+    O1HEAP_ASSERT((old_frag->header.size % FRAGMENT_SIZE_MIN) == 0U);
+    
+    // Calculate the usable size of the old allocation
+    const size_t old_usable_size = old_frag->header.size - O1HEAP_ALIGNMENT;
+    
+    // If the new size fits in the current block and doesn't waste too much space, keep it
+    // This optimization avoids unnecessary copying when the new size is smaller or similar
+    if (size <= old_usable_size) {
+        // The current block is large enough, check if it's worth keeping
+        // Keep the block if the new size is at least 50% of the old usable size
+        // to avoid excessive internal fragmentation
+        if (size >= old_usable_size / 2) {
+            return ptr; // Return the same pointer
+        }
+    }
+    
+    // Need to allocate a new block
+    void* new_ptr = o1heapAllocate(handle, size);
+    
+    if (new_ptr != NULL) {
+        // Determine how much data to copy
+        const size_t copy_size = (size < old_usable_size) ? size : old_usable_size;
+        if (copy_size > 0U) {
+            // MISRA COMPLIANT: Cast both pointers to same type (unsigned char*) */
+            // Rule 21.15 - both parameters must be pointers to compatible types */
+            unsigned char* const dest_ptr = (unsigned char*)new_ptr;
+            const unsigned char* const src_ptr = (const unsigned char*)ptr;
+
+            if (dest_ptr < src_ptr) {
+                /* Forward copy */
+                for (size_t i = 0U; i < copy_size; i++) {
+                    dest_ptr[i] = src_ptr[i];
+                }
+            } else if (dest_ptr > src_ptr) {
+                /* Backward copy to handle overlap */
+                for (size_t i = copy_size; i > 0U; i--) {
+                    dest_ptr[i - 1U] = src_ptr[i - 1U];
+                }
+            }
+        }
+        // Free the old block after successful copy
+        o1heapFree(handle, ptr);
+    }
+    
+    // Return the new pointer (or NULL if allocation failed)
+    // If allocation failed, the original block remains unchanged
+    return new_ptr;
+}
